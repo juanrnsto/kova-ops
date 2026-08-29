@@ -1,0 +1,10 @@
+{
+  "_comment": "Synthetic sample. Real stop files are gitignored and generated per delivery day from unfulfilled paid orders.",
+  "home": "Union Station, Los Angeles, CA 90012",
+  "stops": [
+    { "name": "Sample A", "address": "300 S Santa Fe Ave, Los Angeles, CA 90013" },
+    { "name": "Sample B", "address": "1 World Way, Los Angeles, CA 90045" },
+    { "name": "Sample C", "address": "100 Universal City Plaza, Universal City, CA 91608" },
+    { "name": "Sample D", "address": "6801 Hollywood Blvd, Los Angeles, CA 90028" }
+  ]
+}

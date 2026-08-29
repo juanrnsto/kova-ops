@@ -1,0 +1,8 @@
+*.local.json
+*.credentials.json
+token_*.json
+guard-fires.log
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
