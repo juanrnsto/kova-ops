@@ -1,5 +1,5 @@
 import json, subprocess, sys, os, tempfile
-HOOK="/Users/juanturcios/.claude/hooks/git-destructive-guard.py"
+HOOK=os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-destructive-guard.py")
 
 # Build two throwaway repos: one DIRTY, one CLEAN — so the noise-control logic is
 # tested against real repo state, not mocked.

@@ -17,7 +17,7 @@ about the machine it runs on.
 """
 import json, os, shutil, subprocess, sys, tempfile
 
-HOOK = "/Users/juanturcios/.claude/hooks/theme-push-guard.py"
+HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "theme-push-guard.py")
 GIT = "/opt/homebrew/bin/git" if os.path.exists("/opt/homebrew/bin/git") else "/usr/bin/git"
 
 
@@ -52,7 +52,7 @@ CASES = [
  ("push --mirror",               THEME, "git push --mirror", True),
  ("bare push on main",           THEME, "git push", True),
  ("merge on main",               THEME, "git merge feature/x", True),
- ("cd then push (from docs)",    DOCS,  "cd /Users/juanturcios/Kova/kova-theme && git push origin main", True),
+ ("cd then push (from docs)",    DOCS,  "cd ~/work/kova-theme && git push origin main", True),
  ("git -C theme push main",      DOCS,  "git -C kova-theme push origin main", True),
  ("compound; hidden push",       THEME, "git add -A ; git commit -m 'x' ; git push origin main", True),
  ("shopify theme push",          THEME, "shopify theme push", True),
