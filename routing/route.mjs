@@ -248,15 +248,24 @@ function report(route, ordered, departMin, label) {
   // model runs optimistic (Aug 13 arrivals were +4 to +24 min), so a centred window turns
   // every estimate error into a late arrival. Clamping matters too: a centred window once
   // quoted "8:24–9:24pm", promising a doorbell the hard 9pm cap forbids.
+  // A stop arriving AFTER the cap has no window. Clamping past the cap produced an end
+  // BEFORE the start and a negative width — "window 9:31pm–9:00pm ⚠️ only -31m wide".
   const narrow = [];
+  const pastCap = [];
   for (const r of rows) {
-    const winEnd = Math.min(r.arriveMin + 60, capMin);
+    const past = r.arriveMin >= capMin;
+    const winEnd = past ? r.arriveMin : Math.min(r.arriveMin + 60, capMin);
     const width = Math.round(winEnd - r.arriveMin);
-    if (width < 30) narrow.push({ seq: r.seq, name: r.name, width });
-    const win = `${clock(r.arriveMin)}–${clock(winEnd)}`;
+    if (past) pastCap.push({ seq: r.seq, name: r.name });
+    else if (width < 30) narrow.push({ seq: r.seq, name: r.name, width });
+    const win = past ? "— none —" : `${clock(r.arriveMin)}–${clock(winEnd)}`;
     console.log(` ${r.seq}. ${String(r.name).padEnd(20)} ${clock(r.arriveMin).padStart(8)}` +
                 `   window ${win.padEnd(19)} ${r.legMi.toFixed(1)} mi leg` +
-                (width < 30 ? `  ⚠️ only ${width}m wide` : ""));
+                (past ? `  🔴 past cap — nothing to quote` : width < 30 ? `  ⚠️ only ${width}m wide` : ""));
+  }
+  if (pastCap.length) {
+    console.log(`${"─".repeat(72)}`);
+    console.log(`🔴 ${pastCap.length} stop(s) arrive after the ${clock(capMin)} cap — there is no window to quote.`);
   }
   if (narrow.length) {
     console.log(`${"─".repeat(72)}`);

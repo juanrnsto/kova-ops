@@ -61,6 +61,7 @@ const stopOutput = z.object({
   seq: z.number(), name: z.string(), address: z.string(),
   eta: z.string(), window_start: z.string(), window_end: z.string(),
   window_minutes: z.number(), leg_miles: z.number(), narrow_window: z.boolean(),
+  past_cap: z.boolean().describe("Arrives after the cap. There is no window to quote; window_minutes is 0."),
 });
 
 const scheduleOutput = {

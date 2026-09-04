@@ -300,9 +300,16 @@ function walk(route, ordered, departMin, serviceMin) {
 function windows(rows, capMin) {
   const warnings = [];
   const stops = rows.map((r) => {
-    const winEnd = Math.min(r.arriveMin + 60, capMin);
+    // A stop arriving AFTER the cap has no window at all. The clamp above only makes sense on
+    // the near side of the cap; past it, Math.min returned an end BEFORE the start and a
+    // negative width — "quote 9:31pm-9:00pm (only -31m wide)". That is not a narrow window,
+    // it is the absence of one, so say so instead of arithmetic on a boundary already crossed.
+    const past_cap = r.arriveMin >= capMin;
+    const winEnd = past_cap ? r.arriveMin : Math.min(r.arriveMin + 60, capMin);
     const width = Math.round(winEnd - r.arriveMin);
-    if (width < 30)
+    if (past_cap)
+      warnings.push(`Stop ${r.seq} (${r.name}) arrives ${clock(r.arriveMin)}, past the ${clock(capMin)} cap — there is no window to quote.`);
+    else if (width < 30)
       warnings.push(`Stop ${r.seq} (${r.name}) has only a ${width}-minute window once clamped at the cap — do not quote it.`);
     return {
       seq: r.seq,
@@ -314,6 +321,7 @@ function windows(rows, capMin) {
       window_minutes: width,
       leg_miles: +r.legMi.toFixed(1),
       narrow_window: width < 30,
+      past_cap,
     };
   });
   if (warnings.length)
@@ -411,9 +419,11 @@ export function summarize(r) {
   lines.push(`${r.date} - leave ${clock(hhmm(r.depart_at))} - ${r.total_miles} mi - ` +
              `${r.driving_hours} h driving with traffic - home ${clock(hhmm(r.home_at))}`);
   for (const s of r.stops)
-    lines.push(`  ${s.seq}. ${s.name} - ETA ${clock(hhmm(s.eta))}, quote ` +
-               `${clock(hhmm(s.window_start))}-${clock(hhmm(s.window_end))}` +
-               (s.narrow_window ? `  (only ${s.window_minutes}m wide)` : ""));
+    lines.push(`  ${s.seq}. ${s.name} - ETA ${clock(hhmm(s.eta))}, ` +
+               (s.past_cap
+                 ? `NO window - arrives past the ${clock(hhmm(r.cap))} cap`
+                 : `quote ${clock(hhmm(s.window_start))}-${clock(hhmm(s.window_end))}` +
+                   (s.narrow_window ? `  (only ${s.window_minutes}m wide)` : "")));
   lines.push(r.within_cap
     ? `Last drop ${clock(hhmm(r.last_drop))} - within the ${clock(hhmm(r.cap))} cap.`
     : `Last drop ${clock(hhmm(r.last_drop))} - PAST the ${clock(hhmm(r.cap))} cap by ${r.minutes_past_cap} min.`);
