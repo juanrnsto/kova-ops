@@ -14,6 +14,7 @@ here. What is here runs, and is tested.
 
 ```
 97/97 tests passing across two safety hooks
+21/21 on the MCP server (14 of them without an API key)
 ```
 
 ---
@@ -109,6 +110,37 @@ refuses to exceed a hard call ceiling in a single run so a bug can't run up a bi
 `sample-stops.json` is synthetic. Real stop files are generated per delivery day from unfulfilled
 paid orders and are gitignored — they're customer addresses.
 
+### `mcp/` — the routing, exposed as an MCP server
+
+`routing/route.mjs` answers its two questions in a terminal. `mcp/` answers them for an agent. It is
+an MCP server over stdio with two tools, `solve_route` and `latest_departure`, and one command wires
+it into Claude Code:
+
+```
+claude mcp add kova-route -- node /absolute/path/to/kova-ops/mcp/server.mjs
+```
+
+Then I can ask how late I can leave with five drops to make, and Claude calls the tool and reads back
+the order, each ETA, and the window to quote every customer.
+
+Everywhere else in this repo I consume MCP servers other people wrote: Shopify, Xero, Notion, Gmail.
+This one is mine. The protocol itself is small, because the tools declare a schema and the SDK handles
+the handshake. What changes when a script becomes a server:
+
+| CLI (`routing/route.mjs`) | server (`mcp/`) |
+|---|---|
+| `process.exit(1)` on bad input | throws, and the tool answers with the reason |
+| prints a table | returns structured data against a declared output schema |
+| counts API calls in one variable | a budget per request, and a ceiling per process |
+
+The CLI is the one that has routed real deliveries, and I did not refactor it to share code with the
+server. It runs live deliveries and its original lives outside this repo. A public mirror is the wrong
+place to fork running code.
+
+The test suite drives the server over stdio with the SDK's own client, because reading the source
+proves nothing about a protocol. It makes six malformed calls and then checks the server is still
+serving. See [mcp/README.md](mcp/README.md) for the three decisions worth naming.
+
 ### `skills/` and `scheduled/`
 
 How the agent layer is organized: reusable skills with explicit trigger conditions, and scheduled
@@ -139,6 +171,7 @@ routines that run against live business data. See each directory's README.
                       └───────────────────────────────┘
 
    Cloudflare Worker receives Shopify webhooks → logs to Notion → push alerts
+   kova-route (mcp/) is my own MCP server, exposing the delivery routing to the agent layer
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full write-up, including the failure modes that

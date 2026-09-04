@@ -17,6 +17,9 @@ client, so credentials live in one place and the agent layer talks to all of the
   the same way.
 - **Scheduled routines** — cron-triggered passes over live data: nightly task rollover, a weekly
   reconciliation check, a media sweep.
+- **Tools of my own** — `mcp/` is an MCP server I had built for the delivery routing, so the two
+  questions the `routing/` CLI answers in a terminal are also callable by an agent. Everywhere else
+  in the stack I consume connectors somebody else wrote; this is the one I author.
 
 **Safety layer.** PreToolUse hooks that see every shell command before it runs. This repo.
 
@@ -69,6 +72,30 @@ rather than inline.
 
 **Generalization:** know which of your false positives are structural, and document the workaround
 next to the rule.
+
+---
+
+### A script exits; a server has to survive
+
+The routing CLI calls `process.exit(1)` on a bad address, a bad time, a missing key. That is correct
+for a script: it runs once, a person is watching, and the exit code is the message. Wrapping the same
+logic in an MCP server inverts every one of those assumptions. Nobody is watching, the process is
+meant to outlive the request, and an exit takes down a tool the client has already listed.
+
+So the server core throws instead, and one `respond()` wrapper turns a domain failure into the tool's
+*answer* — `isError` plus the reason the caller can act on. A bad time, an ungeocodable address, a
+departure in the past, no feasible departure at all: each is a result, not a crash. The test suite
+makes six malformed calls and then asserts the server is still serving, because that is the property
+that actually matters and the one no amount of reading the source can confirm.
+
+Two more inversions came with it:
+
+- **The API key is read on the first tool call, not at boot.** A client starts every configured
+  server at once. A server that refuses to start is harder to diagnose than a tool that says which
+  two places a key can live.
+- **The call budget had to become two budgets.** The CLI counts calls in a module variable and then
+  exits, which is a ceiling by accident. A long-lived server needs a limit per request *and* per
+  process, or one looping client spends a month of quota against a metered API.
 
 ---
 
