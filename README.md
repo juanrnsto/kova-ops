@@ -13,7 +13,7 @@ private version carries customer addresses, financial detail, and API credential
 here. What is here runs, and is tested.
 
 ```
-73/73 tests passing across two safety hooks
+97/97 tests passing across two safety hooks
 ```
 
 ---
@@ -52,15 +52,15 @@ Python hooks that intercept shell commands before an agent runs them.
 
 | Hook | Stops |
 |---|---|
-| `theme-push-guard.py` | Anything that could publish the live storefront — push/merge to `main` in the theme repo, `gh pr merge`, `shopify theme push` |
+| `theme-push-guard.py` | Anything that could publish a live site — push/merge to `main` in either deploy-connected repo, `gh pr merge`, `shopify theme push` |
 | `git-destructive-guard.py` | Destructive git in any repo — hard resets, forced working-tree wipes, branch deletion |
 
-Both ship with their own test suite (`*.test.py`, 39 and 34 cases). Run them directly:
+Both ship with their own test suite (`*.test.py`, 61 and 36 cases). Run them directly:
 
 ```bash
 python3 hooks/theme-push-guard.py < payload.json     # reads a hook payload on stdin
-python3 hooks/theme-push-guard.test.py               # 39/39
-python3 hooks/git-destructive-guard.test.py          # 34/34
+python3 hooks/theme-push-guard.test.py               # 61/61
+python3 hooks/git-destructive-guard.test.py          # 36/36
 ```
 
 **Three design decisions worth explaining**, because they're the interesting part:

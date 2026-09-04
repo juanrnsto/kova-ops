@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook (Bash): guard the LIVE Shopify theme against a silent publish.
+"""PreToolUse hook (Bash): guard live-deploying repos against a silent publish.
 
 `kova-theme` is GitHub-connected to its own repo's `main` branch — merging or
 pushing `main` auto-deploys to the live storefront with no preview gate. The
@@ -12,13 +12,19 @@ Until now that rule was prose only — nothing mechanically stopped a
 any command that could publish, so the narrow self-merge lane still works but
 can never happen silently.
 
+Two repos qualify (Sep 1 2026). `kova-theme` publishes the Shopify storefront;
+`juanernesto-site` publishes juanernesto.com via Cloudflare Pages. Both are
+Git-connected on `main`, so a merge or push there deploys with no preview gate.
+Only `main` is guarded: `juanernesto-site`'s `preview` branch also builds a real
+deployment, and shipping there is the intended workflow rather than a risk.
+
 Design notes (deliberate, do not "simplify" away):
   * Explicit-main patterns are matched on the command STRING FIRST, with no
     subprocess dependency — so the guard still fires if git is unavailable.
   * The ambiguous cases (bare `git push`, `git merge`) need the current branch.
     If that lookup fails we ASK rather than allow: we already know we are
     looking at a push inside the theme repo, so fail-SAFE, not fail-open.
-  * Outside a kova-theme context the hook exits silently and allows.
+  * Outside a guarded repo the hook exits silently and allows.
   * Written for Python 3.9 (/usr/bin/python3 under a minimal hook PATH) —
     no tomllib, no match/case, no `X | Y` type unions. See the scheduler
     PATH trap: bare `python3` is 3.12 by hand and 3.9.6 under launchd/hooks.
@@ -30,7 +36,93 @@ import shlex
 import subprocess
 import sys
 
-THEME_DIRNAME = "kova-theme"
+# Repos whose `main` is wired to a live deploy, keyed by an identifier the repo
+# answers to: its directory basename OR its origin remote's slug. Both, because
+# `~/juanernesto/site` is a directory called `site` and only the remote says WHICH
+# site — `another project’s `site`` is also a directory called `site`, and matching on
+# basename alone would guard a repo nobody asked to guard.
+MSG_FLAGS = ("-m", "--message", "-F", "--file")
+
+# <<EOF / <<'EOF' / <<"EOF" / <<-EOF, up to a line that is just the delimiter.
+_HEREDOC = re.compile(r"<<-?\s*[\'\"]?(\w+)[\'\"]?\r?\n.*?^\s*\1\s*$",
+                      re.S | re.M)
+# the same opener with no closing delimiter anywhere: the body runs to the end.
+_HEREDOC_OPEN = re.compile(r"<<-?\s*[\'\"]?\w+[\'\"]?\r?\n[\s\S]*\Z")
+
+
+def strip_heredocs(command):
+    """Remove heredoc BODIES before tokenising.
+
+    🔴 shlex has no idea what a heredoc is, so `python3 - <<'PY' ... PY` hands it
+    every word of the body as an ordinary argument. That blocked a legitimate
+    push whose only sin was a doc-writing heredoc in the same Bash call that
+    mentioned a guarded repo in prose — the exact false positive the message-flag
+    fix was meant to end, arriving through a second door.
+
+    A heredoc body is STDIN. It is never a path, a remote or a refspec, so
+    nothing here can hide a real publish: the `git push` itself lives outside the
+    body and is still tokenised normally.
+    """
+    prev = None
+    while prev != command:                    # nested / multiple heredocs
+        prev = command
+        command = _HEREDOC.sub(" <<HEREDOC ", command)
+    return _HEREDOC_OPEN.sub(" <<HEREDOC", command)
+
+
+def named_repos(command):
+    """GUARDED keys appearing as an ARGUMENT — never inside a commit message.
+
+    Only the message-bearing flags have their payload dropped. `-C <path>` and
+    every other token still count, because a repo named in a path IS the case
+    this lookup exists for. Substring matching within a surviving token is kept
+    on purpose: `~/work/kova-theme` has to match `kova-theme`.
+    """
+    command = strip_heredocs(command)
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    args, skip = [], False
+    for t in tokens:
+        if skip:                                  # this token IS the message
+            skip = False
+            continue
+        if t in MSG_FLAGS:
+            skip = True
+            continue
+        # the attached forms: --message=..., -F=..., -mfixed a thing
+        if t.startswith(("--message=", "--file=")):
+            continue
+        if len(t) > 2 and t.startswith("-m") and not t.startswith("--"):
+            continue
+        args.append(t)
+    return [k for k in GUARDED if any(k in a for a in args)]
+
+
+GUARDED = {
+    "kova-theme": {
+        "surface": "the LIVE Kova storefront",
+        "policy": (
+            "Claude may self-merge ONLY changes that provably render nothing to a "
+            "visitor (comments, intent markers, unreachable templates, dev tooling). "
+            "Anything customer-facing belongs on a branch + PR."
+        ),
+    },
+    # Added Sep 1 2026, same shape as kova-theme: Git-connected Cloudflare Pages,
+    # so `main` publishes juanernesto.com with no gate. `preview` is deliberately
+    # NOT guarded — every branch builds, and Juan's standing rule for this repo is
+    # ship-to-preview and let him look, rather than stage-and-ask.
+    "juanernesto-site": {
+        "surface": "juanernesto.com (live, public, the job-search site)",
+        "policy": (
+            "`preview` is unguarded on purpose: push there freely and hand Juan "
+            "preview.juanernesto-site.pages.dev to look at. Only `main` is gated. "
+            "Once he approves, push BOTH branches — that is how origin/preview "
+            "silently fell two commits behind production before."
+        ),
+    },
+}
 GIT = "/opt/homebrew/bin/git" if os.path.exists("/opt/homebrew/bin/git") else "/usr/bin/git"
 
 
@@ -96,6 +188,31 @@ def ask(reason):
                   "confirmation prompt can reach a human. Blocking rather than "
                   "stalling. Re-run interactively if you meant to do this.\n\n" + reason)
     _log_fire(decision, reason)
+
+    # 🔴 THE DENY CASE MUST EXIT 2, NOT 0 — measured Sep 2 2026, fixed Sep 3 2026.
+    #
+    # The JSON `permissionDecision: "deny"` below is ADVISORY: the harness shows
+    # it to the model but does not enforce it under `bypassPermissions` — which
+    # is the ONLY mode that produces a deny here. Measured consequence: in a
+    # bypass session this guard printed AUTO-DENIED for `git merge --ff-only
+    # preview` on main AND `git push origin main`, and both executed. The reflog
+    # showed the fast-forward and origin/main moved, so juanernesto.com deployed
+    # while the session was being told it had been blocked. The same guard covers
+    # the Kova theme repo, where a push to `main` publishes the live storefront —
+    # so "reports blocked, publishes anyway" was a live Kova safety hole.
+    #
+    # Exit code 2 is the path the harness enforces regardless of permission mode:
+    # the tool call is blocked and stderr is fed back to the model. So the deny
+    # case writes its reason to stderr and exits 2. The ask case is UNCHANGED —
+    # it keeps the JSON contract, because `ask` genuinely works when a human is
+    # at the keyboard and that is what the narrow self-merge lane depends on.
+    #
+    # ⚠️ Do NOT "simplify" this into one exit path. `ask` via exit 2 would turn
+    # every approvable push into a hard block and remove Juan's yes.
+    if decision == "deny":
+        sys.stderr.write(reason + "\n")
+        sys.exit(2)
+
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -122,6 +239,27 @@ def repo_name(path):
     """Basename of the git repo containing `path`, or "" if there isn't one."""
     top = git_out(path, ["rev-parse", "--show-toplevel"])
     return os.path.basename(top) if top else ""
+
+
+def repo_ids(path):
+    """Every identifier the repo at `path` answers to: dirname AND remote slug.
+
+    Both are needed. The test fixtures are throwaway repos with no remote, so
+    dirname has to work; `~/juanernesto/site` carries its identity only in its
+    remote, so the slug has to work too.
+    """
+    ids = set()
+    name = repo_name(path)
+    if name:
+        ids.add(name)
+    remote = git_out(path, ["remote", "get-url", "origin"])
+    if remote:
+        slug = remote.rstrip("/").rsplit("/", 1)[-1]
+        if slug.endswith(".git"):
+            slug = slug[:-4]
+        if slug:
+            ids.add(slug)
+    return ids
 
 
 def segment_cwds(cwd, command):
@@ -189,7 +327,21 @@ def main():
 
     # Naming the repo anywhere in the command still counts, whatever the cwd —
     # that is what catches `git -C kova-theme push` issued from elsewhere.
-    named = THEME_DIRNAME in command
+    #
+    # 🔴 BUT ONLY IN AN ARGUMENT, NEVER IN A COMMIT MESSAGE (fixed Sep 1 2026).
+    # This was `[k for k in GUARDED if k in command]` — a raw substring test over
+    # the whole command line, so the guard could not tell a PATH from PROSE. Any
+    # commit whose message mentioned a guarded repo made an UNRELATED repo's push
+    # ask; under bypassPermissions, ask means auto-DENY, so writing "juanernesto-site"
+    # in a handoff message blocked a push that was never near production. Handoff
+    # commits name repos constantly, so this fired often and looked like the guard
+    # working.
+    # ⚠️ THE NARROWING IS THE RISK — every case it stops matching is an unguarded
+    # deploy — so it is deliberately the SMALLEST one that fixes the bug: drop the
+    # payload of the message-bearing flags and nothing else. `-C` is untouched
+    # because its argument is exactly the path this feature exists to catch, and
+    # the suite asserts both directions (see § THE SUBSTRING FALSE POSITIVE).
+    named = named_repos(command)
 
     for seg, seg_cwd in segment_cwds(cwd, command):
         try:
@@ -198,13 +350,17 @@ def main():
             tokens = seg.split()
         if not tokens:
             continue
-        if not (named or repo_name(seg_cwd) == THEME_DIRNAME):
+        ids = repo_ids(seg_cwd)
+        key = next((k for k in GUARDED if k in named or k in ids), None)
+        if key is None:
             continue
+        site = GUARDED[key]
         cwd = seg_cwd  # branch lookups below must ask the repo this segment runs in
 
         # --- Shopify CLI: the other route to production -------------------
         # CLAUDE.md: never `shopify theme push` to the published theme.
-        if "shopify" in tokens and "theme" in tokens and "push" in tokens:
+        if (key == "kova-theme" and "shopify" in tokens
+                and "theme" in tokens and "push" in tokens):
             ask(
                 "BLOCKED PENDING CONFIRMATION — `shopify theme push` targets the "
                 "LIVE published theme directly, bypassing git and the PR gate "
@@ -223,12 +379,10 @@ def main():
         # have run when asked to "push #60".
         if tokens[0] == "gh" and "merge" in tokens:
             ask(
-                "BLOCKED PENDING CONFIRMATION — `gh pr merge` on kova-theme. "
-                "Merging a PR into `main` publishes to the LIVE storefront "
-                "immediately, exactly like `git push origin main`. Claude may "
-                "self-merge ONLY changes that provably render nothing to a "
-                "visitor; anything customer-facing is Juan's merge to make."
-                "\n\n  " + seg.strip()
+                "BLOCKED PENDING CONFIRMATION — `gh pr merge` on " + key + ". "
+                "Merging a PR into `main` publishes " + site["surface"] + " "
+                "immediately, exactly like pushing that branch.\n\n"
+                + site["policy"] + "\n\n  " + seg.strip()
             )
 
         if "git" not in tokens:
@@ -239,19 +393,17 @@ def main():
             branch = git_out(cwd, ["branch", "--show-current"])
             if branch is None:
                 ask(
-                    "BLOCKED PENDING CONFIRMATION — a `git merge` in kova-theme, "
+                    "BLOCKED PENDING CONFIRMATION — a `git merge` in " + key + ", "
                     "and the current branch could not be determined. If this "
-                    "merges into `main` it publishes to the live store on the "
-                    "next push.\n\n  " + seg.strip()
+                    "merges into `main` it publishes " + site["surface"] + " on "
+                    "the next push.\n\n  " + seg.strip()
                 )
             if branch == "main":
                 ask(
                     "BLOCKED PENDING CONFIRMATION — merging into `main` in "
-                    "kova-theme. `main` IS the published theme; this deploys "
-                    "live once pushed. Claude may self-merge ONLY changes that "
-                    "provably render nothing to a visitor (comments, intent "
-                    "markers, unreachable templates, dev tooling). Anything "
-                    "customer-facing belongs on a branch + PR.\n\n  " + seg.strip()
+                    + key + ". `main` IS what is published: this deploys "
+                    + site["surface"] + " once pushed.\n\n"
+                    + site["policy"] + "\n\n  " + seg.strip()
                 )
             continue
 
@@ -263,8 +415,8 @@ def main():
         if "--all" in tokens or "--mirror" in tokens:
             ask(
                 "BLOCKED PENDING CONFIRMATION — `git push --all/--mirror` in "
-                "kova-theme pushes every branch INCLUDING `main`, which "
-                "auto-deploys to the live storefront.\n\n  " + seg.strip()
+                + key + " pushes every branch INCLUDING `main`, which "
+                "auto-deploys " + site["surface"] + ".\n\n  " + seg.strip()
             )
 
         refspecs = positional_args(tokens, "push")[1:]  # drop the remote
@@ -278,11 +430,10 @@ def main():
                 if dest == "main":
                     ask(
                         "BLOCKED PENDING CONFIRMATION — pushing to `main` in "
-                        "kova-theme. The repo is GitHub-connected to the "
-                        "published theme: this deploys to the LIVE storefront "
-                        "immediately, with no preview gate. Push the branch and "
-                        "open a PR unless this change provably renders nothing "
-                        "to a visitor.\n\n  " + seg.strip()
+                        + key + ". The repo is Git-connected to its host, so "
+                        "this deploys " + site["surface"] + " immediately, with "
+                        "no preview gate.\n\n"
+                        + site["policy"] + "\n\n  " + seg.strip()
                     )
             continue
 
@@ -290,16 +441,15 @@ def main():
         branch = git_out(cwd, ["branch", "--show-current"])
         if branch is None:
             ask(
-                "BLOCKED PENDING CONFIRMATION — a bare `git push` in kova-theme, "
+                "BLOCKED PENDING CONFIRMATION — a bare `git push` in " + key + ", "
                 "and the current branch could not be determined. If this is "
-                "`main` it deploys to the live storefront.\n\n  " + seg.strip()
+                "`main` it deploys " + site["surface"] + ".\n\n  " + seg.strip()
             )
         if branch == "main":
             ask(
                 "BLOCKED PENDING CONFIRMATION — bare `git push` while on `main` "
-                "in kova-theme. This publishes to the LIVE storefront "
-                "immediately. Branch + PR unless the change provably renders "
-                "nothing to a visitor.\n\n  " + seg.strip()
+                "in " + key + ". This publishes " + site["surface"] + " "
+                "immediately.\n\n" + site["policy"] + "\n\n  " + seg.strip()
             )
 
     allow()

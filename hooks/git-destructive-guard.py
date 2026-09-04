@@ -88,6 +88,21 @@ def ask(reason, seg):
                 "confirmation can reach a human. Blocking rather than stalling. "
                 "Re-run interactively if this was intended.\n\n" + full)
     _log_fire(decision, full)
+
+    # 🔴 THE DENY CASE MUST EXIT 2, NOT 0 — fixed Sep 3 2026, same defect and
+    # same fix as theme-push-guard (see the long comment there for the measured
+    # evidence). The JSON below is advisory and is NOT enforced under
+    # `bypassPermissions`, which is the only mode that yields a deny — so a
+    # working-tree wipe could be reported as blocked and still run. Exit 2 is
+    # the path the harness enforces in every mode.
+    #
+    # ⚠️ The `ask` path deliberately stays on the JSON contract. Turning ask
+    # into exit 2 would hard-block destructive git that Juan meant to approve,
+    # which is the whole point of asking him.
+    if decision == "deny":
+        sys.stderr.write(full + "\n")
+        sys.exit(2)
+
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

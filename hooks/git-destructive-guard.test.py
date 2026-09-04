@@ -1,5 +1,5 @@
 import json, subprocess, sys, os, tempfile
-HOOK=os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-destructive-guard.py")
+HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-destructive-guard.py")
 
 # Build two throwaway repos: one DIRTY, one CLEAN — so the noise-control logic is
 # tested against real repo state, not mocked.
@@ -88,16 +88,51 @@ for label, mode, expect in MODE_CASES:
         body["permission_mode"] = mode
     r = subprocess.run(["/usr/bin/python3", HOOK], input=json.dumps(body),
                        capture_output=True, text=True)
-    got = "deny" if '"deny"' in r.stdout else ('"ask"' in r.stdout and "ask" or "NONE")
-    ok = (got == expect) and r.returncode == 0 and not r.stderr.strip()
+    # A deny is delivered by EXIT CODE 2 + stderr, not by JSON on stdout — the
+    # JSON path is advisory and is not enforced under bypassPermissions, which
+    # is the only mode that denies. An ask stays on the JSON contract, exit 0.
+    if r.returncode == 2:
+        got = "deny"
+        ok = (expect == "deny") and "AUTO-DENIED" in r.stderr and not r.stdout.strip()
+    else:
+        got = "ask" if '"ask"' in r.stdout else "NONE"
+        ok = (got == expect) and r.returncode == 0 and not r.stderr.strip()
     if not ok:
         fails += 1
-        print(f"  FAIL [{got}] {label}")
+        print(f"  FAIL [{got}] {label} (rc={r.returncode})")
         if r.stderr.strip(): print("       stderr:", r.stderr.strip()[:200])
     else:
-        print(f"  ok   [{got:4}] {label}")
+        print(f"  ok   [{got:4}] {label} (rc={r.returncode})")
 
-total = len(CASES) + len(MODE_CASES)
+# --- the deny must be ENFORCEABLE, not merely reported --------------------
+# Added Sep 3 2026. This is the regression test for the measured Sep 2 defect:
+# the guard printed AUTO-DENIED and exited 0, so the harness ran the command
+# anyway under bypassPermissions. Asserting the decision STRING is not enough —
+# that string was always correct. Only the exit code blocks the tool call.
+print()
+ENFORCE = [
+    ("deny is exit 2 + stderr, no stdout", "bypassPermissions", "git reset --hard HEAD~3", 2),
+    ("ask stays exit 0 + stdout JSON",     "default",           "git reset --hard HEAD~3", 0),
+]
+for label, mode, cmd, want_rc in ENFORCE:
+    r = subprocess.run(["/usr/bin/python3", HOOK],
+                       input=json.dumps({"tool_name": "Bash", "cwd": CLEAN,
+                                         "permission_mode": mode,
+                                         "tool_input": {"command": cmd}}),
+                       capture_output=True, text=True)
+    if want_rc == 2:
+        ok = (r.returncode == 2 and "AUTO-DENIED" in r.stderr
+              and not r.stdout.strip())
+    else:
+        ok = (r.returncode == 0 and '"ask"' in r.stdout
+              and not r.stderr.strip())
+    if not ok:
+        fails += 1
+        print(f"  FAIL {label} (rc={r.returncode}, stdout={len(r.stdout)}B, stderr={len(r.stderr)}B)")
+    else:
+        print(f"  ok   {label} (rc={r.returncode})")
+
+total = len(CASES) + len(MODE_CASES) + len(ENFORCE)
 print()
 print(f"{total-fails}/{total} passed" if not fails else f"*** {fails} FAILURES ***")
 sys.exit(1 if fails else 0)
