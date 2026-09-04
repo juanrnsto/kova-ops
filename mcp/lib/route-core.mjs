@@ -27,7 +27,6 @@ import { join } from "node:path";
 const ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes";
 const KEY_FILE = join(homedir(), ".config", "kova-automation", "google-maps-api-key");
 const TZ = "America/Los_Angeles";
-const TZ_OFFSET = "-07:00"; // PDT. Change to -08:00 during PST.
 
 export const MAX_STOPS = 25;          // Routes API intermediate-waypoint limit
 export const DEFAULT_SERVICE_MIN = 8; // minutes at the door
@@ -119,8 +118,30 @@ export function nowMinutesLA() {
   return +t.slice(0, 2) * 60 + +t.slice(3, 5);
 }
 
+/**
+ * The UTC offset Los Angeles is actually on, on the given DATE — not a constant.
+ *
+ * The CLI this method came from hardcodes "-07:00" with a comment to change it during PST, and
+ * that constant is a dated time bomb: clocks go back on 1 Nov 2026, after which every arrival time
+ * it reports is an hour out, silently, in a season when the 9pm cap is tightest. A server published
+ * as a work sample cannot carry that, so the offset is derived instead.
+ *
+ * Noon UTC is used as the probe instant deliberately: it is never within a DST transition in this
+ * zone, so the date's offset is unambiguous.
+ */
+function zoneOffset(date) {
+  const probe = new Date(`${date}T12:00:00Z`);
+  const name = new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "longOffset" })
+    .formatToParts(probe).find((p) => p.type === "timeZoneName")?.value ?? "GMT+00:00";
+  const off = name.replace("GMT", "").trim();
+  return off === "" ? "+00:00" : off;          // "GMT" alone means UTC
+}
+
+/** Exported for the test suite only: the DST flip is the thing worth locking. */
+export const zoneOffsetForTest = zoneOffset;
+
 const rfc3339 = (date, minutes) =>
-  `${date}T${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}:00${TZ_OFFSET}`;
+  `${date}T${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}:00${zoneOffset(date)}`;
 
 // ------------------------------------------------------------------ validation
 

@@ -94,6 +94,19 @@ ok("a non-ISO date returns isError", badDate.isError === true);
 const still = await client.listTools();
 ok("the server is still serving after six bad calls", still.tools.length === 2);
 
+// ------------------------------------------------- the offset is derived, not constant
+
+// The CLI this method came from hardcodes "-07:00" with a note to change it during PST. That is a
+// dated bug: clocks go back 1 Nov 2026 and every arrival time silently shifts an hour. Lock the fix.
+{
+  const { zoneOffsetForTest } = await import("../lib/route-core.mjs");
+  ok("the LA offset is derived from the date, and flips at the DST boundary",
+     zoneOffsetForTest("2026-10-31") === "-07:00" && zoneOffsetForTest("2026-11-01") === "-08:00",
+     `${zoneOffsetForTest("2026-10-31")} / ${zoneOffsetForTest("2026-11-01")}`);
+  ok("and flips back the following spring",
+     zoneOffsetForTest("2027-03-15") === "-07:00", zoneOffsetForTest("2027-03-15"));
+}
+
 // ---------------------------------------------------------------- live (opt-in)
 
 if (process.env.KOVA_ROUTE_LIVE === "1") {

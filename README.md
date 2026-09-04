@@ -14,7 +14,7 @@ here. What is here runs, and is tested.
 
 ```
 97/97 tests passing across two safety hooks
-21/21 on the MCP server (14 of them without an API key)
+23/23 on the MCP server (16 of them without an API key)
 ```
 
 ---

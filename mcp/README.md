@@ -76,12 +76,12 @@ narrower than 30 minutes after clamping comes back flagged, with instructions no
 
 ```
 npm install
-npm test                      # 14 assertions, no API calls, no key needed
+npm test                      # 16 assertions, no API calls, no key needed
 KOVA_ROUTE_LIVE=1 npm test    # adds one real solve (2 Routes API events)
 ```
 
 The test drives the server over stdio with the SDK's own `Client`, because reading the source
-proves nothing about a protocol — only a handshake does. Last live run: 21/21.
+proves nothing about a protocol — only a handshake does. Last live run: 23/23.
 
 ## Requirements
 
